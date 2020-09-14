@@ -1,0 +1,93 @@
+name: Build (Linux / ADE)
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build-ade-image:
+    runs-on: ubuntu-18.04
+    container:
+      image: docker:dind
+
+    steps:
+    - name: Checkout source
+      uses: actions/checkout@v2
+
+    - name: Print tree
+      run: |
+        pwd
+        echo 'PWD'
+        find
+        apk add --update-cache git
+
+    - name: Build ADE image
+      run: |
+        set -x
+        export CI_COMMIT_SHA=${{ github.sha }}
+        export CI_COMMIT_REF_SLUG=$(echo ${{ github.head_ref }} | cut -d/ -f2- | tr "[:upper:]" "[:lower:]" | sed "s/[^[:alnum:]-]/-/g")
+        export CI_REGISTRY=ghcr.io
+        export CI_REGISTRY_IMAGE="$CI_REGISTRY/${{ github.repository_owner }}"
+        export CI_JOB_TOKEN=${{ secrets.CR_PAT }}
+        export CI_USERNAME=${{ github.repository_owner }}
+        apk add --update-cache git
+        cd tools/ade_image
+        docker login -u $CI_USERNAME -p $CI_JOB_TOKEN $CI_REGISTRY
+        echo "=== DOCKER PUSH: docker push $CI_REGISTRY_IMAGE$ARCH/ade:commit-$CI_COMMIT_SHA"
+        echo "=== DOCKER PUSH: docker push $CI_REGISTRY_IMAGE$ARCH/ade:$CI_COMMIT_REF_SLUG"
+        if [[ -n "$FORCE" ]]; then
+            chmod og-w . -R;
+            docker build --label ade_image_commit_sha="$CI_COMMIT_SHA" -t image .;
+        else
+            (
+                docker pull $CI_REGISTRY_IMAGE$ARCH/ade:commit-$CI_COMMIT_SHA &&
+                docker tag $CI_REGISTRY_IMAGE$ARCH/ade:commit-$CI_COMMIT_SHA image
+            ) || (
+                chmod og-w . -R;
+                docker build --label ade_image_commit_sha="$CI_COMMIT_SHA" -t image .;
+            );
+        fi
+
+        docker tag image $CI_REGISTRY_IMAGE$ARCH/ade:commit-$CI_COMMIT_SHA
+        docker tag image $CI_REGISTRY_IMAGE$ARCH/ade:$CI_COMMIT_REF_SLUG
+        docker push $CI_REGISTRY_IMAGE$ARCH/ade:commit-$CI_COMMIT_SHA
+        docker push $CI_REGISTRY_IMAGE$ARCH/ade:$CI_COMMIT_REF_SLUG
+
+  build-linux-ade:
+    needs: build-ade-image
+    runs-on: ubuntu-18.04
+    # container:
+    #   image: ghcr.io/${{ github.repository_owner }}/ade:commit-${{ github.sha }}
+
+    steps:
+    - name: Test docker pull
+      run: |
+        docker pull ghcr.io/${{ github.repository_owner }}/ade:commit-${{ github.sha }}
+        # mkdir -p ~/ros2_dotnet_ws/src
+        # cd ~/ros2_dotnet_ws
+        # cp ${{github.workspace}}/ros2_dotnet.repos .
+        # vcs import src < ros2_dotnet.repos
+
+    # steps:
+    # - name: Configure ros2_dotnet workspace
+    #   run: |
+    #     mkdir -p ~/ros2_dotnet_ws/src
+    #     cd ~/ros2_dotnet_ws
+    #     cp ${{github.workspace}}/ros2_dotnet.repos .
+    #     vcs import src < ros2_dotnet.repos
+    #     rm -rf src/ros2_dotnet/ros2_dotnet
+    #     cp -r ${{github.workspace}} src/ros2_dotnet/ros2_dotnet
+    #     vcs branch
+
+    # - name: Build ros2_dotnet source
+    #   run: |
+    #     source /opt/ros/eloquent/setup.bash
+    #     cd ~/ros2_dotnet_ws
+    #     colcon build --event-handlers console_cohesion+ console_package_list+
+
+    # - name: Run tests
+    #   run: |
+    #     source /opt/ros/eloquent/setup.bash
+    #     cd ~/ros2_dotnet_ws
+    #     colcon test --event-handlers console_cohesion+ --return-code-on-test-failure --packages-select rcldotnet
